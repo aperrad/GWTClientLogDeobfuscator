@@ -1,0 +1,6 @@
+# { 9 }
+# { 'locale' : 'fr' , 'user.agent' : 'safari' }
+# jsName, jsniIdent, className, memberName, sourceUri, sourceLine, fragmentNumber
+Y,com.test.Method::$clinit()V,com.test.Method,$clinit,com.test.Method,$clinit.java,10,0
+Y_,com.test.Method2::$clinit()V,com.test.Method2,$clinit,com.test.Method,$clinit.java,10,0
+$Y,com.test.Method3::$clinit()V,com.test.Method3,$clinit,com.test.Method,$clinit.java,10,0
