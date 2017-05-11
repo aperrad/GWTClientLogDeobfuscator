@@ -16,15 +16,21 @@ import java.util.Map;
 
 public class GWTClientLogDeobfuscator {
     public static void main(String[] args) {
-        System.out.println("Launch GWT Log DebobfuscatorÒ");
+        System.out.println("Launch GWT Client Log Debobfuscator");
 
-        String stackTracePath = args[0];
-        String sourceMapPath = args[1];
-        String path = args[2];
+        if(args.length == 3){
+            String stackTracePath = args[0];
+            String sourceMapPath = args[1];
+            String path = args[2];
 
-
-        Map<String, String> map = generateMapFromSourceMapFile(sourceMapPath);
-        deobfuscateStackTrace(stackTracePath, map, path);
+            Map<String, String> map = generateMapFromSourceMapFile(sourceMapPath);
+            deobfuscateStackTrace(stackTracePath, map, path);
+        }
+        else{
+            System.out.println("Missing parameters");
+            System.out.println("Usage : ");
+            System.out.println("java -jar gwt-client-log-deobfuscator-jar-with-dependencies.jar STACKTRACE_FILEPATH SOURCEMAP_FILEPATH OUTPUT_FILEPATH");
+        }
     }
 
     protected static Map<String, String> generateMapFromSourceMapFile(String sourceMapPath) {
@@ -37,7 +43,6 @@ public class GWTClientLogDeobfuscator {
                 String[] splittedLine = StringUtils.split(line, ",");
                 if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
                     sourceMap.put(splittedLine[0], splittedLine[1]);
-                    System.out.println(splittedLine[0] + " - " + splittedLine[1]);
                 }
             }
         } catch (FileNotFoundException fException) {
@@ -62,10 +67,6 @@ public class GWTClientLogDeobfuscator {
                 } else {
                     methodCallList.add(line);
                 }
-            }
-
-            for (String method : methodCallList) {
-                System.out.println(method);
             }
         } catch (FileNotFoundException fException) {
         } catch (IOException ioException) {
