@@ -1,95 +1,248 @@
 package GWTClientLogDeobfuscator;
 
-import org.apache.commons.lang3.StringUtils;
-
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.lang3.StringUtils;
+import org.json.JSONObject;
 
 public class GWTClientLogDeobfuscator {
-    public static void main(String[] args) {
-        System.out.println("Launch GWT Client Log Debobfuscator");
 
-        if(args.length == 3){
-            String stackTracePath = args[0];
-            String sourceMapPath = args[1];
-            String path = args[2];
+	public static void main(String[] args) throws IOException, ParseException {
+		final Options firstOptions = configFirstParameters();
+		final Options options = configParameters(firstOptions);
+		final CommandLineParser parser = new DefaultParser();
+		final CommandLine firstLine = parser.parse(firstOptions, args, true);
 
-            Map<String, String> map = generateMapFromSourceMapFile(sourceMapPath);
-            deobfuscateStackTrace(stackTracePath, map, path);
-        }
-        else{
-            System.out.println("Missing parameters");
-            System.out.println("Usage : ");
-            System.out.println("java -jar gwt-client-log-deobfuscator-jar-with-dependencies.jar STACKTRACE_FILEPATH SOURCEMAP_FILEPATH OUTPUT_FILEPATH");
-        }
-    }
+		boolean helpMode = firstLine.hasOption("help");
+		if (helpMode || firstLine.getArgList().isEmpty()) {
+			final HelpFormatter formatter = new HelpFormatter();
+			formatter.printHelp("gwt-client-log-deobfuscator-jar-with-dependencies.jar", options, true);
+			System.exit(0);
+		}
 
-    protected static Map<String, String> generateMapFromSourceMapFile(String sourceMapPath) {
-        File file = new File(sourceMapPath);
-        Map<String, String> sourceMap = new HashMap<>();
+		final CommandLine line = parser.parse(options, args);
 
-        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                String[] splittedLine = StringUtils.split(line, ",");
-                if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
-                    sourceMap.put(splittedLine[0], splittedLine[1]);
-                }
-            }
-        } catch (FileNotFoundException fException) {
-        } catch (IOException ioException) {
-        }
-        return sourceMap;
-    }
+		String stackTracePath = line.getOptionValue("stacktrace");
+		String war = line.getOptionValue("war", "");
+		String symbolMap = line.getOptionValue("symbolmap", "");
+		String path = line.getOptionValue("output");
+		String userAgent = line.getOptionValue("useragent", "unknown");
+		String locale = line.getOptionValue("locale", "unknown");
 
-    protected static void deobfuscateStackTrace(String stackTracePath, Map<String, String> map, String path) {
-        File file = new File(stackTracePath);
-        List<String> methodCallList = new ArrayList<>();
+		Map<String, String> map = new HashMap<>();
+		if (!symbolMap.isEmpty()) {
+			map = generateMapFromSourceMapFile(symbolMap);
+		} else if (!war.isEmpty()) {
+			InputStream warSourceMap = getSourceMapFileFromWar(war, userAgent, locale);
+			map = generateMapFromSourceMapFile(warSourceMap);
+		} else {
+			System.err.println("Cannot unobfuscate stacktrace without symbolMap or WAR file");
+			return;
+		}
 
-        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
-            String line;
+		deobfuscateStackTrace(stackTracePath, map, path);
+	}
 
-            while ((line = br.readLine()) != null) {
-                String requiredString = StringUtils.substringBetween(line, ".", "(");
-                if (requiredString != null && !requiredString.isEmpty()) {
-                    String key = requiredString;
-                    String methodName = map.get(key);
-                    methodCallList.add(methodName == null ? line : methodName);
-                } else {
-                    methodCallList.add(line);
-                }
-            }
-        } catch (FileNotFoundException fException) {
-        } catch (IOException ioException) {
-        }
-        writeToFile(methodCallList, path);
-    }
+	private static Options configFirstParameters() {
 
-    protected static void writeToFile(List<String> methodCallList, String
-            path) {
-        File f = new File(path);
-        try {
-            if (!f.exists()) {
-                f.createNewFile();
-            }
+		final Option helpFileOption = Option.builder("h") //
+				.longOpt("help").desc("Display help").build();
 
-            FileWriter fw = new FileWriter(f.getAbsoluteFile());
-            BufferedWriter bw = new BufferedWriter(fw);
+		final Options firstOptions = new Options();
 
-            for (String methodName : methodCallList) {
-                bw.write(methodName + System.getProperty("line.separator"));
-            }
-            bw.close();
-        } catch (IOException e) {
-        }
-    }
+		firstOptions.addOption(helpFileOption);
+
+		return firstOptions;
+
+	}
+
+	private static Options configParameters(Options firstOptions) {
+
+		final Option stackOption = Option.builder("s").longOpt("stacktrace").desc("Stack trace file path").hasArg(true)
+				.argName("stacktrace").required(true).build();
+
+		final Option warOption = Option.builder("w").longOpt("war").desc("Webapp WAR file path").hasArg(true)
+				.argName("war").required(false).build();
+
+		final Option userAgentOption = Option.builder("u").longOpt("useragent")
+				.desc("User agent used when exception was thrown").hasArg(true).argName("useragent").required(false)
+				.build();
+
+		final Option localeOption = Option.builder("l").longOpt("locale").desc("Locale used when exception was thrown")
+				.hasArg(true).argName("locale").required(false).build();
+
+		final Option symbolMapOption = Option.builder("m").longOpt("symbolmap")
+				.desc("Symbol map to deobfuscate exception").hasArg(true).argName("symbolmap").required(false).build();
+
+		final Option outputOption = Option.builder("o").longOpt("output")
+				.desc("Output file path for deobfuscate stacktrace").hasArg(true).argName("output").required(true)
+				.build();
+
+		final Options options = new Options();
+
+		// First Options
+		for (final Option fo : firstOptions.getOptions()) {
+			options.addOption(fo);
+		}
+
+		options.addOption(stackOption);
+		options.addOption(warOption);
+		options.addOption(userAgentOption);
+		options.addOption(localeOption);
+		options.addOption(symbolMapOption);
+		options.addOption(outputOption);
+
+		return options;
+	}
+
+	@SuppressWarnings("resource")
+	protected static InputStream getSourceMapFileFromWar(String warPath, String userAgent, String locale)
+			throws IOException {
+		ZipFile warFile = new ZipFile(warPath);
+		Enumeration<?> zipEntries = warFile.entries();
+
+		while (zipEntries.hasMoreElements()) {
+			ZipEntry zipEntry = (ZipEntry) zipEntries.nextElement();
+			String fileName = zipEntry.getName();
+			if (fileName.endsWith(".symbolMap")) {
+				if (isNeededSourceMap(warFile.getInputStream(zipEntry), userAgent, locale)) {
+					return getZipEntryInputStream(warFile, zipEntry);
+				}
+			}
+		}
+
+		String exceptionMsg = "No sourcemap was found for useragent " + userAgent + " and locale " + locale;
+		throw new FileNotFoundException(exceptionMsg);
+	}
+
+	private static InputStream getZipEntryInputStream(ZipFile warFile, ZipEntry zipEntry) throws IOException {
+		return warFile.getInputStream(zipEntry);
+	}
+
+	private static boolean isNeededSourceMap(InputStream symbolMap, String userAgent, String locale) {
+		try (BufferedReader br = new BufferedReader(new InputStreamReader(symbolMap, "UTF-8"))) {
+			String line;
+			int lineCounter = 0;
+			while (lineCounter < 10) {
+				line = br.readLine();
+				if (line.startsWith("#") && lineCounter > 0) {
+					String substring = line.substring(2);
+					if (!substring.startsWith("{")) {
+						System.out.println("Not a correct json object");
+						return false;
+					}
+
+					JSONObject json = new JSONObject(substring);
+					String jsonLocale = json.get("locale").toString();
+					String jsonUserAgent = json.get("user.agent").toString();
+					if (jsonLocale.equals(locale) && jsonUserAgent.equals(userAgent)) {
+						return true;
+					}
+				}
+				lineCounter++;
+			}
+		} catch (FileNotFoundException fException) {
+		} catch (IOException ioException) {
+		}
+		return false;
+	}
+
+	protected static Map<String, String> generateMapFromSourceMapFile(String sourceMapPath) {
+		File file = new File(sourceMapPath);
+		Map<String, String> sourceMap = new HashMap<>();
+
+		try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+			String line;
+			while ((line = br.readLine()) != null) {
+				String[] splittedLine = StringUtils.split(line, ",");
+				if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
+					sourceMap.put(splittedLine[0], splittedLine[1]);
+				}
+			}
+		} catch (FileNotFoundException fException) {
+		} catch (IOException ioException) {
+		}
+		return sourceMap;
+	}
+
+	protected static Map<String, String> generateMapFromSourceMapFile(InputStream symbolMapInput) {
+		Map<String, String> sourceMap = new HashMap<>();
+
+		try (BufferedReader br = new BufferedReader(new InputStreamReader(symbolMapInput))) {
+			String line;
+			while ((line = br.readLine()) != null) {
+				String[] splittedLine = StringUtils.split(line, ",");
+				if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
+					sourceMap.put(splittedLine[0], splittedLine[1]);
+				}
+			}
+		} catch (FileNotFoundException fException) {
+		} catch (IOException ioException) {
+		}
+		return sourceMap;
+	}
+
+	protected static void deobfuscateStackTrace(String stackTracePath, Map<String, String> map, String path) {
+		File file = new File(stackTracePath);
+		List<String> methodCallList = new ArrayList<>();
+
+		try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+			String line;
+
+			while ((line = br.readLine()) != null) {
+				String requiredString = StringUtils.substringBetween(line, ".", "(");
+				if (requiredString != null && !requiredString.isEmpty()) {
+					String key = requiredString;
+					String methodName = map.get(key);
+					methodCallList.add(methodName == null ? line : methodName);
+				} else {
+					methodCallList.add(line);
+				}
+			}
+		} catch (FileNotFoundException fException) {
+		} catch (IOException ioException) {
+		}
+		writeToFile(methodCallList, path);
+	}
+
+	protected static void writeToFile(List<String> methodCallList, String path) {
+		File f = new File(path);
+		try {
+			if (!f.exists()) {
+				f.createNewFile();
+			}
+
+			FileWriter fw = new FileWriter(f.getAbsoluteFile());
+			BufferedWriter bw = new BufferedWriter(fw);
+
+			for (String methodName : methodCallList) {
+				bw.write(methodName + System.getProperty("line.separator"));
+			}
+			bw.close();
+		} catch (IOException e) {
+		}
+		System.out.println("Successful deobfuscation to path : " + path);
+	}
 }
