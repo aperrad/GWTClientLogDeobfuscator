@@ -61,6 +61,42 @@ public class GWTClientLogDeobfuscatorTest {
 		deobfuscateFile.delete();
 	}
 
+	@Test
+	public void test_get_method_name_from_source_map_key_with_war_file_and_unormalized_user_agent() throws IOException {
+		File initialFile = new File(LOG_FILE);
+
+		InputStream sourceMapFile = GWTClientLogDeobfuscator.getSourceMapFileFromWar(WAR_FILE, "Chrome ", "fr");
+		Map<String, String> sourceMap = GWTClientLogDeobfuscator.generateMapFromSourceMapFile(sourceMapFile);
+		GWTClientLogDeobfuscator.deobfuscateStackTrace(LOG_FILE, sourceMap, PATH_TO_WRITE);
+
+		File deobfuscateFile = new File(PATH_TO_WRITE);
+		String fileAsString = FileUtils.readFileToString(deobfuscateFile, Charset.defaultCharset());
+		Assert.assertFalse(FileUtils.contentEquals(initialFile, deobfuscateFile));
+		Assert.assertTrue(fileAsString.contains("com.test.Method"));
+		Assert.assertTrue(fileAsString.contains("com.test.Method2"));
+		Assert.assertTrue(fileAsString.contains("com.test.Method3"));
+
+		deobfuscateFile.delete();
+	}
+
+	@Test
+	public void test_get_method_name_from_source_map_key_with_war_file_and_unormalized_locale() throws IOException {
+		File initialFile = new File(LOG_FILE);
+
+		InputStream sourceMapFile = GWTClientLogDeobfuscator.getSourceMapFileFromWar(WAR_FILE, "safari", "FR");
+		Map<String, String> sourceMap = GWTClientLogDeobfuscator.generateMapFromSourceMapFile(sourceMapFile);
+		GWTClientLogDeobfuscator.deobfuscateStackTrace(LOG_FILE, sourceMap, PATH_TO_WRITE);
+
+		File deobfuscateFile = new File(PATH_TO_WRITE);
+		String fileAsString = FileUtils.readFileToString(deobfuscateFile, Charset.defaultCharset());
+		Assert.assertFalse(FileUtils.contentEquals(initialFile, deobfuscateFile));
+		Assert.assertTrue(fileAsString.contains("com.test.Method"));
+		Assert.assertTrue(fileAsString.contains("com.test.Method2"));
+		Assert.assertTrue(fileAsString.contains("com.test.Method3"));
+
+		deobfuscateFile.delete();
+	}
+
 	@Test(expected = FileNotFoundException.class)
 	public void test_fail_to_find_symbolmap_from_war_file_and_incorrect_useragent() throws IOException {
 		InputStream sourceMapFile = GWTClientLogDeobfuscator.getSourceMapFileFromWar(WAR_FILE, "unknown user agent",

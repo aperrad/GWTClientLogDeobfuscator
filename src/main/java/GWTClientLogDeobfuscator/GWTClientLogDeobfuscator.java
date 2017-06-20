@@ -54,15 +54,31 @@ public class GWTClientLogDeobfuscator {
 		Map<String, String> map = new HashMap<>();
 		if (!symbolMap.isEmpty()) {
 			map = generateMapFromSourceMapFile(symbolMap);
-		} else if (!war.isEmpty()) {
+		} else if (!war.isEmpty() && !userAgent.isEmpty() && !locale.isEmpty()) {
 			InputStream warSourceMap = getSourceMapFileFromWar(war, userAgent, locale);
 			map = generateMapFromSourceMapFile(warSourceMap);
 		} else {
-			System.err.println("Cannot unobfuscate stacktrace without symbolMap or WAR file");
+			System.err.println(
+					"Cannot deobfuscate stacktrace without symbolMap or WAR file with a correct user agent and locale");
 			return;
 		}
 
 		deobfuscateStackTrace(stackTracePath, map, path);
+	}
+
+	private static String normalizeUserAgent(String userAgent) {
+		String normalizeUserAgent = new String(userAgent.toLowerCase().trim());
+
+		if (normalizeUserAgent.equals("chrome")) {
+			normalizeUserAgent = "safari";
+		} else if (normalizeUserAgent.equals("firefox")) {
+			normalizeUserAgent = "gecko1_8";
+		}
+		return normalizeUserAgent;
+	}
+
+	private static String normalizeLocale(String userAgent) {
+		return userAgent.toLowerCase().trim();
 	}
 
 	private static Options configFirstParameters() {
@@ -87,8 +103,8 @@ public class GWTClientLogDeobfuscator {
 				.argName("war").required(false).build();
 
 		final Option userAgentOption = Option.builder("u").longOpt("useragent")
-				.desc("User agent used when exception was thrown").hasArg(true).argName("useragent").required(false)
-				.build();
+				.desc("User agent used when exception was thrown. \nAuthorized values are : ie8,ie9,ie10, gecko1_8, safari, chrome, firefox")
+				.hasArg(true).argName("useragent").required(false).build();
 
 		final Option localeOption = Option.builder("l").longOpt("locale").desc("Locale used when exception was thrown")
 				.hasArg(true).argName("locale").required(false).build();
@@ -118,8 +134,10 @@ public class GWTClientLogDeobfuscator {
 	}
 
 	@SuppressWarnings("resource")
-	protected static InputStream getSourceMapFileFromWar(String warPath, String userAgent, String locale)
+	protected static InputStream getSourceMapFileFromWar(String warPath, String inputUserAgent, String inputLocale)
 			throws IOException {
+		String userAgent = normalizeUserAgent(inputUserAgent);
+		String locale = normalizeLocale(inputLocale);
 		ZipFile warFile = new ZipFile(warPath);
 		Enumeration<?> zipEntries = warFile.entries();
 
@@ -150,7 +168,6 @@ public class GWTClientLogDeobfuscator {
 				if (line.startsWith("#") && lineCounter > 0) {
 					String substring = line.substring(2);
 					if (!substring.startsWith("{")) {
-						System.out.println("Not a correct json object");
 						return false;
 					}
 
