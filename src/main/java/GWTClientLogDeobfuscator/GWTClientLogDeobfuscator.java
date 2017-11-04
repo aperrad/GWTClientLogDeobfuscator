@@ -24,7 +24,16 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.impl.client.DefaultHttpClient;
 import org.json.JSONObject;
 
 public class GWTClientLogDeobfuscator {
@@ -50,12 +59,25 @@ public class GWTClientLogDeobfuscator {
 		String path = line.getOptionValue("output");
 		String userAgent = line.getOptionValue("useragent", "unknown");
 		String locale = line.getOptionValue("locale", "unknown");
+		String user = line.getOptionValue("user", "");
+		String password = line.getOptionValue("password", "");
 
 		Map<String, String> map = new HashMap<>();
 		if (!symbolMap.isEmpty()) {
 			map = generateMapFromSourceMapFile(symbolMap);
 		} else if (!war.isEmpty() && !userAgent.isEmpty() && !locale.isEmpty()) {
-			InputStream warSourceMap = getSourceMapFileFromWar(war, userAgent, locale);
+			InputStream warSourceMap;
+			if (war.startsWith("http")) {
+				System.out.println("War path, is an http URL, try to download it");
+				InputStream warFile = getFile(war, user, password);
+				warSourceMap = getSourceMapFileFromWar(warFile, userAgent, locale);
+			} else {
+				warSourceMap = getSourceMapFileFromWar(war, userAgent, locale);
+			}
+
+			if (warSourceMap == null) {
+				return;
+			}
 			map = generateMapFromSourceMapFile(warSourceMap);
 		} else {
 			System.err.println(
@@ -64,6 +86,17 @@ public class GWTClientLogDeobfuscator {
 		}
 
 		deobfuscateStackTrace(stackTracePath, map, path);
+	}
+
+	private static InputStream getFile(String url, String user, String password)
+			throws ClientProtocolException, IOException {
+		HttpClient httpClient = new DefaultHttpClient();
+		HttpGet httpGet = new HttpGet(url);
+		httpGet.addHeader(BasicScheme.authenticate(new UsernamePasswordCredentials(user, password), "UTF-8", false));
+
+		HttpResponse httpResponse = httpClient.execute(httpGet);
+		HttpEntity responseEntity = httpResponse.getEntity();
+		return responseEntity.getContent();
 	}
 
 	private static String normalizeUserAgent(String userAgent) {
@@ -116,6 +149,12 @@ public class GWTClientLogDeobfuscator {
 				.desc("Output file path for deobfuscate stacktrace").hasArg(true).argName("output").required(true)
 				.build();
 
+		final Option userOption = Option.builder("user").desc("User to connect to war location if remote").hasArg(true)
+				.argName("user").required(false).build();
+
+		final Option passwordOption = Option.builder("pwd").longOpt("password")
+				.desc("Password used to connect to war location if remote").hasArg(true).argName("password")
+				.required(false).build();
 		final Options options = new Options();
 
 		// First Options
@@ -129,16 +168,30 @@ public class GWTClientLogDeobfuscator {
 		options.addOption(localeOption);
 		options.addOption(symbolMapOption);
 		options.addOption(outputOption);
+		options.addOption(userOption);
+		options.addOption(passwordOption);
 
 		return options;
 	}
 
-	@SuppressWarnings("resource")
+	private static InputStream getSourceMapFileFromWar(InputStream war, String inputUserAgent, String inputLocale)
+			throws IOException {
+		File tmpFile = File.createTempFile("GWTClientLogDeobfuscator-war-file", "tmp");
+		FileUtils.copyInputStreamToFile(war, tmpFile);
+		ZipFile warFile = new ZipFile(tmpFile);
+		return getSourceMapFileFromWar(warFile, inputUserAgent, inputLocale);
+	}
+
 	protected static InputStream getSourceMapFileFromWar(String warPath, String inputUserAgent, String inputLocale)
+			throws IOException {
+		ZipFile warFile = new ZipFile(warPath);
+		return getSourceMapFileFromWar(warFile, inputUserAgent, inputLocale);
+	}
+
+	private static InputStream getSourceMapFileFromWar(ZipFile warFile, String inputUserAgent, String inputLocale)
 			throws IOException {
 		String userAgent = normalizeUserAgent(inputUserAgent);
 		String locale = normalizeLocale(inputLocale);
-		ZipFile warFile = new ZipFile(warPath);
 		Enumeration<?> zipEntries = warFile.entries();
 
 		while (zipEntries.hasMoreElements()) {
@@ -244,7 +297,7 @@ public class GWTClientLogDeobfuscator {
 		writeToFile(methodCallList, path);
 	}
 
-	protected static void writeToFile(List<String> methodCallList, String path) {
+	private static void writeToFile(List<String> methodCallList, String path) {
 		File f = new File(path);
 		try {
 			if (!f.exists()) {
