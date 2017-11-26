@@ -38,6 +38,8 @@ import org.json.JSONObject;
 
 public class GWTClientLogDeobfuscator {
 
+	private static String endOfProcessMessage;
+
 	public static void main(String[] args) throws IOException, ParseException {
 		final Options firstOptions = configFirstParameters();
 		final Options options = configParameters(firstOptions);
@@ -62,6 +64,12 @@ public class GWTClientLogDeobfuscator {
 		String user = line.getOptionValue("user", "");
 		String password = line.getOptionValue("password", "");
 
+		deobfuscate(stackTracePath, war, symbolMap, path, userAgent, locale, user, password);
+	}
+
+	protected static void deobfuscate(String stackTracePath, String war, String symbolMap, String path,
+			String userAgent, String locale, String user, String password) throws IOException {
+		endOfProcessMessage = "";
 		Map<String, String> map = new HashMap<>();
 		if (!symbolMap.isEmpty()) {
 			map = generateMapFromSourceMapFile(symbolMap);
@@ -80,9 +88,8 @@ public class GWTClientLogDeobfuscator {
 			}
 			map = generateMapFromSourceMapFile(warSourceMap);
 		} else {
-			System.err.println(
+			throw new IllegalStateException(
 					"Cannot deobfuscate stacktrace without symbolMap or WAR file with a correct user agent and locale");
-			return;
 		}
 
 		deobfuscateStackTrace(stackTracePath, map, path);
@@ -313,6 +320,11 @@ public class GWTClientLogDeobfuscator {
 			bw.close();
 		} catch (IOException e) {
 		}
-		System.out.println("Successful deobfuscation to path : " + path);
+		endOfProcessMessage = "Successful deobfuscation to path : " + path;
+		System.out.println(endOfProcessMessage);
+	}
+
+	public static String getMessage() {
+		return endOfProcessMessage;
 	}
 }
