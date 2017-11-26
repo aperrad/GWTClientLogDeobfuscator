@@ -30,6 +30,6 @@ java -jar -s input.log -m example.symbolMap -l fr -u safari -o output.log
 
 * From WAR file :
 ```sh
-java -jar -s input.log -m example.war -l fr -u safari -o output.log
+java -jar -s input.log -w example.war -l fr -u safari -o output.log
 ```
 
