@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -14,6 +15,9 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -55,12 +59,12 @@ public class GWTClientLogDeobfuscator {
 
 		final CommandLine line = parser.parse(options, args);
 
-		String stackTracePath = line.getOptionValue("stacktrace");
+		String stackTracePath = line.getOptionValue("stacktrace", "");
 		String war = line.getOptionValue("war", "");
 		String symbolMap = line.getOptionValue("symbolmap", "");
-		String path = line.getOptionValue("output");
-		String userAgent = line.getOptionValue("useragent", "unknown");
-		String locale = line.getOptionValue("locale", "unknown");
+		String path = line.getOptionValue("output", "");
+		String userAgent = line.getOptionValue("useragent", "gecko1_8");
+		String locale = line.getOptionValue("locale", "");
 		String user = line.getOptionValue("user", "");
 		String password = line.getOptionValue("password", "");
 
@@ -73,7 +77,7 @@ public class GWTClientLogDeobfuscator {
 		Map<String, String> map = new HashMap<>();
 		if (!symbolMap.isEmpty()) {
 			map = generateMapFromSourceMapFile(symbolMap);
-		} else if (!war.isEmpty() && !userAgent.isEmpty() && !locale.isEmpty()) {
+		} else if (!war.isEmpty() && !userAgent.isEmpty()) {
 			InputStream warSourceMap;
 			if (war.startsWith("http")) {
 				System.out.println("War path, is an http URL, try to download it");
@@ -137,13 +141,13 @@ public class GWTClientLogDeobfuscator {
 	private static Options configParameters(Options firstOptions) {
 
 		final Option stackOption = Option.builder("s").longOpt("stacktrace").desc("Stack trace file path").hasArg(true)
-				.argName("stacktrace").required(true).build();
+				.argName("stacktrace").required(false).build();
 
 		final Option warOption = Option.builder("w").longOpt("war").desc("Webapp WAR file path").hasArg(true)
 				.argName("war").required(false).build();
 
-		final Option userAgentOption = Option.builder("u").longOpt("useragent")
-				.desc("User agent used when exception was thrown. \nAuthorized values are : ie8,ie9,ie10, gecko1_8, safari, chrome, firefox")
+		final Option userAgentOption = Option.builder("u").longOpt("useragent").desc(
+				"User agent used when exception was thrown. \nAuthorized values are : ie8,ie9,ie10, gecko1_8, safari, chrome, firefox")
 				.hasArg(true).argName("useragent").required(false).build();
 
 		final Option localeOption = Option.builder("l").longOpt("locale").desc("Locale used when exception was thrown")
@@ -153,7 +157,7 @@ public class GWTClientLogDeobfuscator {
 				.desc("Symbol map to deobfuscate exception").hasArg(true).argName("symbolmap").required(false).build();
 
 		final Option outputOption = Option.builder("o").longOpt("output")
-				.desc("Output file path for deobfuscate stacktrace").hasArg(true).argName("output").required(true)
+				.desc("Output file path for deobfuscate stacktrace").hasArg(true).argName("output").required(false)
 				.build();
 
 		final Option userOption = Option.builder("user").desc("User to connect to war location if remote").hasArg(true)
@@ -232,10 +236,15 @@ public class GWTClientLogDeobfuscator {
 					}
 
 					JSONObject json = new JSONObject(substring);
-					String jsonLocale = json.get("locale").toString();
+					String jsonLocale = null;
+					if (json.has("locale")) {
+						jsonLocale = json.get("locale").toString();
+					}
 					String jsonUserAgent = json.get("user.agent").toString();
-					if (jsonLocale.equals(locale) && jsonUserAgent.equals(userAgent)) {
-						return true;
+					if (jsonUserAgent.equals(userAgent)) {
+						if (jsonLocale == null || jsonLocale.equals(locale)) {
+							return true;
+						}
 					}
 				}
 				lineCounter++;
@@ -253,10 +262,7 @@ public class GWTClientLogDeobfuscator {
 		try (BufferedReader br = new BufferedReader(new FileReader(file))) {
 			String line;
 			while ((line = br.readLine()) != null) {
-				String[] splittedLine = StringUtils.split(line, ",");
-				if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
-					sourceMap.put(splittedLine[0], splittedLine[1]);
-				}
+				putInSourceMap(sourceMap, line);
 			}
 		} catch (FileNotFoundException fException) {
 		} catch (IOException ioException) {
@@ -270,10 +276,7 @@ public class GWTClientLogDeobfuscator {
 		try (BufferedReader br = new BufferedReader(new InputStreamReader(symbolMapInput))) {
 			String line;
 			while ((line = br.readLine()) != null) {
-				String[] splittedLine = StringUtils.split(line, ",");
-				if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
-					sourceMap.put(splittedLine[0], splittedLine[1]);
-				}
+				putInSourceMap(sourceMap, line);
 			}
 		} catch (FileNotFoundException fException) {
 		} catch (IOException ioException) {
@@ -281,8 +284,42 @@ public class GWTClientLogDeobfuscator {
 		return sourceMap;
 	}
 
+	private static void putInSourceMap(Map<String, String> sourceMap, String line) {
+		String[] splittedLine = StringUtils.split(line, ",");
+		if (splittedLine.length > 2 && !splittedLine[0].startsWith("#")) {
+			sourceMap.put(splittedLine[0], line.substring(splittedLine[0].length() + 1));
+		}
+	}
+
 	protected static void deobfuscateStackTrace(String stackTracePath, Map<String, String> map, String path) {
-		File file = new File(stackTracePath);
+		File file = null;
+		if (stackTracePath == null || stackTracePath.isEmpty()) {
+			// get stack trace from input
+			try {
+				file = File.createTempFile("deobfuscator", ".logfile");
+				Logger.getLogger(GWTClientLogDeobfuscator.class.getName()).log(Level.INFO,
+						"Please input stack trace from the console, then press enter.");
+				FileOutputStream fos = new FileOutputStream(file);
+				Scanner scanner = new Scanner(System.in);
+				String line = scanner.nextLine();
+				while (line != null && line.length() > 2) {
+					String[] tab = line.split("\n");
+					for (int i = 0; i < tab.length; i++) {
+						fos.write((tab[i].trim() + "\n").getBytes("UTF-8"));
+					}
+					line = scanner.nextLine();
+				}
+				scanner.close();
+				fos.close();
+				// will cleanup afterwards
+				file.deleteOnExit();
+			} catch (IOException e) {
+				// will not be possible to handle
+				return;
+			}
+		} else {
+			file = new File(stackTracePath);
+		}
 		List<String> methodCallList = new ArrayList<>();
 
 		try (BufferedReader br = new BufferedReader(new FileReader(file))) {
@@ -305,23 +342,43 @@ public class GWTClientLogDeobfuscator {
 	}
 
 	private static void writeToFile(List<String> methodCallList, String path) {
-		File f = new File(path);
-		try {
-			if (!f.exists()) {
-				f.createNewFile();
-			}
-
-			FileWriter fw = new FileWriter(f.getAbsoluteFile());
-			BufferedWriter bw = new BufferedWriter(fw);
-
+		if (path == null || path.isEmpty()) {
 			for (String methodName : methodCallList) {
-				bw.write(methodName + System.getProperty("line.separator"));
+				StringBuilder toPrint = new StringBuilder();
+				getPrintFormattedMethodName(methodName, toPrint);
+				System.out.println(toPrint);
 			}
-			bw.close();
-		} catch (IOException e) {
+		} else {
+			File f = new File(path);
+			try {
+				if (!f.exists()) {
+					f.createNewFile();
+				}
+
+				FileWriter fw = new FileWriter(f.getAbsoluteFile());
+				BufferedWriter bw = new BufferedWriter(fw);
+
+				for (String methodName : methodCallList) {
+					StringBuilder toPrint = new StringBuilder();
+					getPrintFormattedMethodName(methodName, toPrint);
+					bw.write(toPrint.toString() + System.getProperty("line.separator"));
+				}
+				bw.close();
+			} catch (IOException e) {
+			}
+			endOfProcessMessage = "Successful deobfuscation to path : " + path;
+			System.out.println(endOfProcessMessage);
 		}
-		endOfProcessMessage = "Successful deobfuscation to path : " + path;
-		System.out.println(endOfProcessMessage);
+	}
+
+	private static void getPrintFormattedMethodName(String methodName, StringBuilder toPrint) {
+		if (!methodName.trim().startsWith("at ") && !methodName.trim().toLowerCase().startsWith("caused")) {
+			toPrint.append("\tat ");
+		}
+		if (methodName.trim().startsWith("at ")) {
+			toPrint.append("\t");
+		}
+		toPrint.append(methodName.trim());
 	}
 
 	public static String getMessage() {
